@@ -24,6 +24,7 @@
 #include <seastar/core/shared_ptr_debug_helper.hh>
 #include <seastar/util/is_smart_ptr.hh>
 #include <seastar/util/indirect.hh>
+#include <seastar/util/consumable-attributes.hh>
 #include <boost/intrusive/parent_from_member.hpp>
 #include <functional>
 #include <memory>
@@ -258,22 +259,29 @@ struct lw_shared_ptr_accessors<T, void_t<decltype(lw_shared_ptr_deleter<T>{})>> 
 }
 
 template <typename T>
-class lw_shared_ptr {
+class SEASTAR_CONSUMABLE(unconsumed) lw_shared_ptr {
     template <typename U>
     using accessors = internal::lw_shared_ptr_accessors<std::remove_const_t<U>>;
 
     mutable lw_shared_ptr_counter_base* _p = nullptr;
 private:
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     lw_shared_ptr(lw_shared_ptr_counter_base* p) noexcept : _p(p) {
         if (_p) {
             ++_p->_count;
         }
     }
     template <typename... A>
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     static lw_shared_ptr make(A&&... a) {
         auto p = new typename accessors<T>::concrete_type(std::forward<A>(a)...);
         accessors<T>::instantiate_to_value(p);
         return lw_shared_ptr(p);
+    }
+
+    SEASTAR_SET_TYPESTATE(consumed)
+    void invalidate() noexcept {
+        _p = nullptr;
     }
 public:
     using element_type = T;
@@ -292,8 +300,11 @@ public:
         }
     };
 
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     lw_shared_ptr() noexcept = default;
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     lw_shared_ptr(std::nullptr_t) noexcept : lw_shared_ptr() {}
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     lw_shared_ptr(const lw_shared_ptr& x) noexcept : _p(x._p) {
         if (_p) {
 #pragma GCC diagnostic push
@@ -304,8 +315,9 @@ public:
 #pragma GCC diagnostic pop
         }
     }
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     lw_shared_ptr(lw_shared_ptr&& x) noexcept  : _p(x._p) {
-        x._p = nullptr;
+        x.invalidate();
     }
     [[gnu::always_inline]]
     ~lw_shared_ptr() {
@@ -341,8 +353,11 @@ public:
         return *this;
     }
 
+    SEASTAR_CALLABLE_WHEN_UNKNOWN_AND(unconsumed)
     T& operator*() const noexcept { return *accessors<T>::to_value(_p); }
+    SEASTAR_CALLABLE_WHEN_UNKNOWN_AND(unconsumed)
     T* operator->() const noexcept { return accessors<T>::to_value(_p); }
+    SEASTAR_CALLABLE_WHEN_UNKNOWN_AND(unconsumed)
     T* get() const noexcept {
         if (_p) {
             return accessors<T>::to_value(_p);
@@ -376,6 +391,7 @@ public:
         }
     }
 
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     operator lw_shared_ptr<const T>() const noexcept {
         return lw_shared_ptr<const T>(_p);
     }
@@ -499,28 +515,40 @@ public:
 };
 
 template <typename T>
-class shared_ptr {
+class SEASTAR_CONSUMABLE(unconsumed) shared_ptr {
     mutable shared_ptr_count_base* _b = nullptr;
     mutable T* _p = nullptr;
 private:
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     explicit shared_ptr(shared_ptr_count_for<T>* b) noexcept : _b(b), _p(&b->data) {
         ++_b->count;
     }
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr(shared_ptr_count_base* b, T* p) noexcept : _b(b), _p(p) {
         if (_b) {
             ++_b->count;
         }
     }
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     explicit shared_ptr(enable_shared_from_this<std::remove_const_t<T>>* p) noexcept : _b(p), _p(static_cast<T*>(p)) {
         if (_b) {
             ++_b->count;
         }
     }
+
+    SEASTAR_SET_TYPESTATE(consumed)
+    void invalidate() noexcept {
+        _b = nullptr;
+        _p = nullptr;
+    }
 public:
     using element_type = T;
 
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr() noexcept = default;
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr(std::nullptr_t) noexcept : shared_ptr() {}
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr(const shared_ptr& x) noexcept
             : _b(x._b)
             , _p(x._p) {
@@ -528,13 +556,14 @@ public:
             ++_b->count;
         }
     }
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr(shared_ptr&& x) noexcept
             : _b(x._b)
             , _p(x._p) {
-        x._b = nullptr;
-        x._p = nullptr;
+        x.invalidate();
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr(const shared_ptr<U>& x) noexcept
             : _b(x._b)
             , _p(x._p) {
@@ -543,11 +572,11 @@ public:
         }
     }
     template <typename U, typename = std::enable_if_t<std::is_base_of<T, U>::value>>
+    SEASTAR_RETURN_TYPESTATE(unconsumed)
     shared_ptr(shared_ptr<U>&& x) noexcept
             : _b(x._b)
             , _p(x._p) {
-        x._b = nullptr;
-        x._p = nullptr;
+        x.invalidate();
     }
     ~shared_ptr() {
 #pragma GCC diagnostic push
@@ -595,12 +624,15 @@ public:
     explicit operator bool() const noexcept {
         return _p;
     }
+    SEASTAR_CALLABLE_WHEN_UNKNOWN_AND(unconsumed)
     T& operator*() const noexcept {
         return *_p;
     }
+    SEASTAR_CALLABLE_WHEN_UNKNOWN_AND(unconsumed)
     T* operator->() const noexcept {
         return _p;
     }
+    SEASTAR_CALLABLE_WHEN_UNKNOWN_AND(unconsumed)
     T* get() const noexcept {
         return _p;
     }
@@ -721,35 +753,35 @@ enable_shared_from_this<T>::shared_from_this() const noexcept {
 template <typename T, typename U>
 inline
 bool
-operator==(const shared_ptr<T>& x, const shared_ptr<U>& y) {
+operator==(const shared_ptr<T>& x SEASTAR_PARAM_TYPESTATE(unconsumed), const shared_ptr<U>& y SEASTAR_PARAM_TYPESTATE(unconsumed)) {
     return x.get() == y.get();
 }
 
 template <typename T>
 inline
 bool
-operator==(const shared_ptr<T>& x, std::nullptr_t) {
+operator==(const shared_ptr<T>& x SEASTAR_PARAM_TYPESTATE(unconsumed), std::nullptr_t) {
     return x.get() == nullptr;
 }
 
 template <typename T>
 inline
 bool
-operator==(std::nullptr_t, const shared_ptr<T>& y) {
+operator==(std::nullptr_t, const shared_ptr<T>& y SEASTAR_PARAM_TYPESTATE(unconsumed)) {
     return nullptr == y.get();
 }
 
 template <typename T>
 inline
 bool
-operator==(const lw_shared_ptr<T>& x, std::nullptr_t) {
+operator==(const lw_shared_ptr<T>& x SEASTAR_PARAM_TYPESTATE(unconsumed), std::nullptr_t) {
     return x.get() == nullptr;
 }
 
 template <typename T>
 inline
 bool
-operator==(std::nullptr_t, const lw_shared_ptr<T>& y) {
+operator==(std::nullptr_t, const lw_shared_ptr<T>& y SEASTAR_PARAM_TYPESTATE(unconsumed)) {
     return nullptr == y.get();
 }
 
